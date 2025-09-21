@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>HSKT Pong (icons + 5% speed-up)</title>
+  <style>
+    body { margin:0; background:black; display:flex; justify-content:center; align-items:center; height:100vh; }
+    canvas { background:black; display:block; }
+  </style>
+</head>
+<body>
+<canvas id="gameCanvas" width="760" height="400"></canvas>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+// -------------------- Layout / Entities --------------------
+const paddleHeight = 80;
+const paddleWidth = 10;
+const leftX = 10;
+const rightX = canvas.width - paddleWidth - 70; // leave space for labels
+
+const leftPaddle = { y: canvas.height/2 - paddleHeight/2 };
+const rightPaddle = { y: canvas.height/2 - paddleHeight/2 };
+
+const ball = { x: canvas.width/2, y: canvas.height/2, dx:0, dy:0, size:12 };
+
+// -------------------- Game State --------------------
+let volleyCount = 0;
+let running = false;
+
+// H/S/K/T zones and visuals
+let zones = ["H","S","K","T"];
+const colors = {H:"red", S:"yellow", K:"green", T:"blue"};
+const emojis = {H:"😀", S:"💪", K:"🦵", T:"🦶"}; // fallback if icon not ready
+const zoneHeight = canvas.height / 4;
+
+// -------------------- Icons (PNG) --------------------
+// 🔧 Replace the paths below with the actual image filenames/URLs you want to use
+const icons = {
+  H: "head.png",
+  S: "shoulders.png",
+  K: "knees.png",
+  T: "toes.png"
+};
+
+// Preload images
+const iconImgs = {};
+for (const key of Object.keys(icons)) {
+  const img = new Image();
+  img.src = icons[key];
+  iconImgs[key] = img;
+}
+
+// -------------------- Speed Control --------------------
+const baseSpeed = 1.8;        // starting speed magnitude (tweakable)
+let speedMultiplier = 1.0;    // grows by +5% on each player hit
+
+function setBallVelocityFromDir(nx, ny) {
+  // normalize
+  const mag = Math.hypot(nx, ny) || 1;
+  const ux = nx / mag, uy = ny / mag;
+  const speed = baseSpeed * speedMultiplier;
+  ball.dx = ux * speed;
+  ball.dy = uy * speed;
+}
+
+// -------------------- Drawing --------------------
+function drawZones() {
+  zones.forEach((z,i) => {
+    const top = i * zoneHeight;
+    // colored strip background
+    ctx.fillStyle = colors[z];
+    ctx.fillRect(canvas.width-60, top, 60, zoneHeight);
+
+    // border
+    ctx.strokeStyle = "white";
+    ctx.strokeRect(canvas.width-60, top, 60, zoneHeight);
+
+    // draw icon centered (fallback to emoji if image not ready)
+    const cx = canvas.width - 30;
+    const cy = top + zoneHeight/2;
+
+    const img = iconImgs[z];
+    if (img && img.complete && img.naturalWidth > 0) {
+      // fit inside zone: max 44x44 box to keep margins
+      const maxSz = Math.min(44, zoneHeight - 16);
+      // maintain aspect ratio
+      const ar = img.naturalWidth / img.naturalHeight;
+      let w = maxSz, h = maxSz;
+      if (ar > 1) h = maxSz / ar; else w = maxSz * ar;
+      ctx.drawImage(img, cx - w/2, cy - h/2, w, h);
+    } else {
+      // fallback text while loading
+      ctx.fillStyle = (z === "S") ? "black" : "white"; // legibility on yellow
+      ctx.font = "20px Arial";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(emojis[z], cx, cy);
+    }
+  });
+}
+
+function drawScore() {
+  ctx.fillStyle = "white";
+  ctx.font = "20px Arial";
+  ctx.textAlign = "left";
+  ctx.fillText("Volleys: " + volleyCount, 20, 30);
+  ctx.fillText("Speed x" + speedMultiplier.toFixed(2), 20, 55);
+}
+
+function draw() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // paddles
+  ctx.fillStyle="white";
+  ctx.fillRect(leftX, leftPaddle.y, paddleWidth, paddleHeight);
+  ctx.fillRect(rightX, rightPaddle.y, paddleWidth, paddleHeight);
+
+  // ball (square)
+  ctx.fillRect(ball.x, ball.y, ball.size, ball.size);
+
+  drawZones();
+  drawScore();
+
+  if (running) {
+    // integrate
+    ball.x += ball.dx;
+    ball.y += ball.dy;
+
+    // Simple AI: follow ball
+    leftPaddle.y = ball.y - paddleHeight/2;
+    if (leftPaddle.y < 0) leftPaddle.y = 0;
+    if (leftPaddle.y + paddleHeight > canvas.height) leftPaddle.y = canvas.height - paddleHeight;
+
+    // ---- Collisions ----
+    // Left (AI) paddle: NO variation, NO speed increase
+    if (ball.x <= leftX + paddleWidth &&
+        ball.y + ball.size > leftPaddle.y &&
+        ball.y < leftPaddle.y + paddleHeight) {
+
+      const snapped = snapToZoneVector("right", ball.x, ball.y, false); // no variation
+      // Keep current multiplier; just re-aim and use normalized * (base*multiplier)
+      setBallVelocityFromDir(snapped.dx, snapped.dy);
+    }
+
+    // Right (Player) paddle: APPLY variation, +5% speed
+    if (ball.x + ball.size >= rightX &&
+        ball.y + ball.size > rightPaddle.y &&
+        ball.y < rightPaddle.y + paddleHeight) {
+
+      const snapped = snapToZoneVector("left", ball.x, ball.y, true); // apply variation
+      // Increase speed by 5% on player hit
+      speedMultiplier *= 1.05;
+      setBallVelocityFromDir(snapped.dx, snapped.dy);
+
+      volleyCount++;
+
+      // swap zones every 5 volleys (your existing rule)
+      if (volleyCount % 5 === 0) {
+        if (volleyCount < 20) shuffleZones(2);
+        else shuffleZones(3);
+      }
+    }
+
+    // Walls (top/bottom): reflect Y
+    if (ball.y < 0 || ball.y + ball.size > canvas.height) {
+      ball.dy *= -1;
+    }
+
+    // Out of bounds (past labels or left): stop round
+    if (ball.x < 0 || ball.x > canvas.width - 60) {
+      running = false;
+    }
+  }
+}
+
+// -------------------- Helpers --------------------
+function getZoneCenters(side) {
+  const x = (side === "left") ? leftX + paddleWidth + ball.size : rightX - ball.size;
+  return zones.map((z, i) => {
+    const y = i*zoneHeight + zoneHeight/2;
+    return {x, y};
+  });
+}
+
+// Always snap to exact center of a random zone; optional ±25° variation
+function snapToZoneVector(paddleSide, ballX, ballY, applyVariation=false) {
+  const targets = getZoneCenters(paddleSide);
+  const chosen = targets[Math.floor(Math.random()*targets.length)];
+  const vx = chosen.x - ballX;
+  const vy = chosen.y - ballY;
+  const mag = Math.hypot(vx, vy) || 1;
+  let nx = vx/mag, ny = vy/mag;
+
+  if (applyVariation) {
+    const variation = (Math.random()*50 - 25) * Math.PI/180; // ±25°
+    const cosA = Math.cos(variation);
+    const sinA = Math.sin(variation);
+    const rx = nx * cosA - ny * sinA;
+    const ry = nx * sinA + ny * cosA;
+    return {dx: rx, dy: ry};
+  }
+
+  return {dx: nx, dy: ny};
+}
+
+function shuffleZones(n) {
+  let indices = [...Array(zones.length).keys()];
+  indices.sort(() => Math.random()-0.5);
+  let picked = indices.slice(0,n);
+  if (n===2) {
+    const a = picked[0], b = picked[1];
+    [zones[a], zones[b]] = [zones[b], zones[a]];
+  }
+  if (n===3) {
+    const [a,b,c] = picked;
+    [zones[a], zones[b], zones[c]] = [zones[c], zones[a], zones[b]];
+  }
+}
+
+function resetBall() {
+  // reset position and speed
+  ball.x = canvas.width/2;
+  ball.y = canvas.height/2;
+  speedMultiplier = 1.0;
+
+  // small random angle to the LEFT to start
+  const angle = (Math.random()*0.6 - 0.3); // -0.3..+0.3 rad in Y, to keep it reasonable
+  const dirx = -1; // left
+  const diry = Math.tan(angle);
+  setBallVelocityFromDir(dirx, diry);
+}
+
+function drawLoop() {
+  draw();
+  requestAnimationFrame(drawLoop);
+}
+
+// -------------------- Controls --------------------
+document.addEventListener("keydown", e=>{
+  if (e.key === "w") {
+    volleyCount = 0;
+    zones = ["H","S","K","T"];
+    resetBall();
+    running = true;
+  }
+
+  // Map numeric keys 1..4 -> H/S/K/T zone alignment for right paddle
+  const keyMap = {"r":"H","y":"S","g":"K","b":"T"};
+  if (keyMap[e.key]) {
+    const zoneIndex = zones.indexOf(keyMap[e.key]);
+    if (zoneIndex !== -1) {
+      rightPaddle.y = zoneIndex*zoneHeight + zoneHeight/2 - paddleHeight/2;
+    }
+  }
+});
+
+// -------------------- Start --------------------
+resetBall();
+drawLoop();
+</script>
+</body>
+</html>
