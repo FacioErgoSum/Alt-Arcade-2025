@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>HSKT Pong</title>
+  <style>
+    body { margin:0; background:black; display:flex; justify-content:center; align-items:center; height:100vh; }
+    canvas { background:black; display:block; }
+  </style>
+</head>
+<body>
+<canvas id="gameCanvas" width="760" height="400"></canvas>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+const paddleHeight = 80;
+const paddleWidth = 10;
+const leftX = 10;
+const rightX = canvas.width - paddleWidth - 70; // leave space for labels
+
+const leftPaddle = { y: canvas.height/2 - paddleHeight/2 };
+const rightPaddle = { y: canvas.height/2 - paddleHeight/2 };
+
+const ball = { x: canvas.width/2, y: canvas.height/2, dx:0, dy:0, size:12 };
+
+let volleyCount = 0;
+let running = false;
+
+let zones = ["H","S","K","T"];
+const colors = {H:"red", S:"yellow", K:"green", T:"blue"};
+const emojis = {H:"😀", S:"💪", K:"🦵", T:"🦶"};
+const zoneHeight = canvas.height / 4;
+
+function drawZones() {
+  zones.forEach((z,i) => {
+    ctx.fillStyle = colors[z];
+    ctx.fillRect(canvas.width-60, i*zoneHeight, 60, zoneHeight);
+    ctx.strokeStyle="white";
+    ctx.strokeRect(canvas.width-60, i*zoneHeight, 60, zoneHeight);
+    ctx.fillStyle="black";
+    ctx.font="20px Arial";
+    ctx.textAlign="center";
+    ctx.textBaseline="middle";
+    ctx.fillText(emojis[z], canvas.width-30, i*zoneHeight+zoneHeight/2);
+  });
+}
+
+function drawScore() {
+  ctx.fillStyle = "white";
+  ctx.font = "20px Arial";
+  ctx.textAlign = "left";
+  ctx.fillText("Volleys: " + volleyCount, 20, 30);
+}
+
+function resetBall() {
+  ball.x = canvas.width/2;
+  ball.y = canvas.height/2;
+  const angle = (Math.random()*0.6 - 0.3);
+  ball.dx = -1.5;
+  ball.dy = angle*1.5;
+}
+
+function shuffleZones(n) {
+  let indices = [...Array(zones.length).keys()];
+  indices.sort(() => Math.random()-0.5);
+  let picked = indices.slice(0,n);
+  if (n===2) {
+    let temp = zones[picked[0]];
+    zones[picked[0]] = zones[picked[1]];
+    zones[picked[1]] = temp;
+  }
+  if (n===3) {
+    [zones[picked[0]], zones[picked[1]], zones[picked[2]]] =
+    [zones[picked[2]], zones[picked[0]], zones[picked[1]]];
+  }
+}
+
+function getZoneCenters(side) {
+  const x = (side === "left") ? leftX + paddleWidth + ball.size : rightX - ball.size;
+  return zones.map((z, i) => {
+    const y = i*zoneHeight + zoneHeight/2;
+    return {x, y};
+  });
+}
+
+function snapToZoneVector(paddleSide, ballX, ballY, applyVariation=false) {
+  const targets = getZoneCenters(paddleSide);
+  // Always snap to the exact center of a random zone
+  const chosen = targets[Math.floor(Math.random()*targets.length)];
+  const vx = chosen.x - ballX;
+  const vy = chosen.y - ballY;
+  const mag = Math.sqrt(vx*vx+vy*vy);
+  let nx = vx/mag, ny = vy/mag;
+
+  if (applyVariation) {
+    // Add +/-25 degree variation only if specified
+    const variation = (Math.random()*50 - 25) * Math.PI/180;
+    const cosA = Math.cos(variation);
+    const sinA = Math.sin(variation);
+    const newDX = nx * cosA - ny * sinA;
+    const newDY = nx * sinA + ny * cosA;
+    return {dx:newDX, dy:newDY};
+  }
+
+  return {dx:nx, dy:ny};
+}
+
+function draw() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  ctx.fillStyle="white";
+  ctx.fillRect(leftX, leftPaddle.y, paddleWidth, paddleHeight);
+  ctx.fillRect(rightX, rightPaddle.y, paddleWidth, paddleHeight);
+
+  ctx.fillRect(ball.x, ball.y, ball.size, ball.size);
+
+  drawZones();
+  drawScore();
+
+  if (running) {
+    ball.x += ball.dx;
+    ball.y += ball.dy;
+
+    // AI follows ball.y
+    leftPaddle.y = ball.y - paddleHeight/2;
+    if (leftPaddle.y < 0) leftPaddle.y = 0;
+    if (leftPaddle.y + paddleHeight > canvas.height) leftPaddle.y = canvas.height - paddleHeight;
+
+    // collisions
+    if (ball.x <= leftX+paddleWidth &&
+        ball.y+ball.size > leftPaddle.y &&
+        ball.y < leftPaddle.y+paddleHeight) {
+      // AI paddle bounce -> no variation
+      const snapped = snapToZoneVector("right", ball.x, ball.y, false);
+      ball.dx = snapped.dx*1.5;
+      ball.dy = snapped.dy*1.5;
+    }
+
+    if (ball.x+ball.size >= rightX &&
+        ball.y+ball.size > rightPaddle.y &&
+        ball.y < rightPaddle.y+paddleHeight) {
+      // Player paddle bounce -> apply variation
+      const snapped = snapToZoneVector("left", ball.x, ball.y, true);
+      ball.dx = snapped.dx*1.5;
+      ball.dy = snapped.dy*1.5;
+      volleyCount++;
+
+      if (volleyCount % 5 === 0) {
+        if (volleyCount < 20) shuffleZones(2);
+        else shuffleZones(3);
+      }
+    }
+
+    if (ball.x < 0 || ball.x > canvas.width-60) {
+      running=false;
+    }
+
+    if (ball.y < 0 || ball.y+ball.size > canvas.height) {
+      ball.dy *= -1;
+    }
+  }
+}
+
+function gameLoop() {
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+document.addEventListener("keydown", e=>{
+  if (e.code==="Space") {
+    volleyCount=0;
+    zones=["H","S","K","T"];
+    resetBall();
+    running=true;
+  }
+  const keyMap={"1":"H","2":"S","3":"K","4":"T"};
+  if (keyMap[e.key]) {
+    const zoneIndex = zones.indexOf(keyMap[e.key]);
+    if (zoneIndex !== -1) {
+      rightPaddle.y = zoneIndex*zoneHeight + zoneHeight/2 - paddleHeight/2;
+    }
+  }
+});
+
+resetBall();
+gameLoop();
+</script>
+</body>
+</html>
